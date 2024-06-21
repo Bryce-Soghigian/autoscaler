@@ -133,6 +133,13 @@ func (m *azureCache) getVMsPoolSet() map[string]struct{} {
 	return m.vmsPoolSet
 }
 
+func (m *azureCache) HasInstance(providerID string) bool {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	_, ok := m.instanceToNodeGroup[azureRef{Name: providerID}]
+	return ok
+}
+
 func (m *azureCache) getVirtualMachines() map[string][]compute.VirtualMachine {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
@@ -162,6 +169,9 @@ func (m *azureCache) regenerate() error {
 	newInstanceToNodeGroupCache := make(map[azureRef]cloudprovider.NodeGroup)
 	for _, ng := range m.registeredNodeGroups {
 		klog.V(4).Infof("regenerate: finding nodes for node group %s", ng.Id())
+		// NOTE: ng.Nodes() gets its values from a direct list call against vmss
+		// this does not represent nodes that have joined the apiserver just instances
+		// the nodegroup owns.
 		instances, err := ng.Nodes()
 		if err != nil {
 			return err
@@ -211,8 +221,8 @@ func (m *azureCache) fetchAzureResources() error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	// fetch all the resources since CAS may be operating on mixed nodepools
-	// including both VMSS and VMs pools
+	// NOTE: this lists virtual machine scale sets, not virtual machine
+	// scale set instances
 	vmssResult, err := m.fetchScaleSets()
 	if err == nil {
 		m.scaleSets = vmssResult
@@ -221,12 +231,11 @@ func (m *azureCache) fetchAzureResources() error {
 	}
 
 	vmResult, vmsPoolSet, err := m.fetchVirtualMachines()
-	if err == nil {
-		m.virtualMachines = vmResult
-		m.vmsPoolSet = vmsPoolSet
-	} else {
+	if err != nil {
 		return err
 	}
+	m.virtualMachines = vmResult
+	m.vmsPoolSet = vmsPoolSet
 
 	return nil
 }
